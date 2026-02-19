@@ -1,0 +1,113 @@
+/**
+ * Sanitizes and validates user input before it reaches external APIs.
+ * This keeps prompts clean and reduces basic injection risks.
+ */
+
+export function sanitizeString(str, maxLength = 200) {
+  // Normalizes free-text fields to reduce XSS/prompt-injection risk and keep payloads bounded.
+  if (typeof str !== "string") return "";
+
+  return str
+    .replace(/[<>]/g, "") // Remove HTML chars
+    .replace(/IGNORE PREVIOUS|IGNORE ALL|SYSTEM:|ASSISTANT:/gi, "") // Remove prompt injection attempts
+    .slice(0, maxLength)
+    .trim();
+}
+
+export function sanitizeArray(arr, maxLength = 20) {
+  // Applies string sanitization to list inputs such as selected activities.
+  if (!Array.isArray(arr)) return [];
+
+  return arr
+    .slice(0, maxLength)
+    .map((item) => sanitizeString(String(item), 100))
+    .filter((item) => item.length > 0);
+}
+
+function parseOptionalNumber(value, min, max) {
+  // Parses optional numeric profile fields; returns null when absent/unparseable.
+  const parsed = Number.parseFloat(value);
+  if (!Number.isFinite(parsed)) return null;
+  return Math.max(min, Math.min(max, parsed));
+}
+
+export function sanitizeChildren(children, maxLength = 10) {
+  // Clamps child profile data to safe ranges used by AI prompts and safety rules.
+  if (!Array.isArray(children)) return [];
+
+  return children.slice(0, maxLength).map((child) => {
+    const safeChild = {
+      age: Math.max(0, Math.min(18, parseInt(child.age) || 0)),
+    };
+
+    const safeWeightLb = parseOptionalNumber(child.weightLb, 2, 300);
+    const safeHeightIn = parseOptionalNumber(child.heightIn, 10, 90);
+
+    if (safeWeightLb !== null) {
+      safeChild.weightLb = safeWeightLb;
+    }
+
+    if (safeHeightIn !== null) {
+      safeChild.heightIn = safeHeightIn;
+    }
+
+    return safeChild;
+  });
+}
+
+export function sanitizeTripData(data) {
+  // Canonical payload sanitizer for trip-related endpoints.
+  const safeData = data || {};
+
+  const sanitized = {
+    destination: sanitizeString(safeData.destination, 100),
+    startDate: safeData.startDate, // ISO dates are safe
+    endDate: safeData.endDate,
+    activities: sanitizeArray(safeData.activities),
+    children: [],
+  };
+
+  sanitized.children = sanitizeChildren(safeData.children);
+
+  return sanitized;
+}
+
+// Validate required fields and basic constraints (e.g., date ranges).
+export function validateTripData(data, options = {}) {
+  // Enforces minimal product constraints before expensive external API calls.
+  const { requireActivities = true } = options;
+  const errors = [];
+
+  if (!data.destination || data.destination.length === 0) {
+    errors.push("Destination is required");
+  }
+
+  if (!data.startDate || !data.endDate) {
+    errors.push("Start and end dates are required");
+  }
+
+  const start = new Date(data.startDate);
+  const end = new Date(data.endDate);
+
+  if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+    errors.push("Invalid date format");
+  }
+
+  if (start >= end) {
+    errors.push("End date must be after start date");
+  }
+
+  const duration = Math.ceil((end - start) / (1000 * 60 * 60 * 24));
+  if (duration > 14) {
+    errors.push("Trip duration cannot exceed 14 days");
+  }
+
+  if (
+    requireActivities &&
+    (!Array.isArray(data.activities) || data.activities.length === 0)
+  ) {
+    errors.push("At least one activity is required");
+  }
+
+  return errors;
+}

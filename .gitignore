@@ -1,0 +1,43 @@
+# Environment variables
+.env
+.env.local
+
+# Dependencies
+node_modules/
+src/frontend/node_modules/
+src/backend/node_modules/
+
+# Build outputs
+dist/
+build/
+src/frontend/dist/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+npm-debug.log*
+logs/
+
+# Testing
+coverage/
+
+# Misc
+.cache/
+
+# Dev tool files (not for public repo)
+docs/CLAUDE.md
+docs/ORIGINAL_BRIEF.md
+docs/StrollerScout_PRD.docx
+docs/Weatherise_PRD_v3.docx
+CHECKLIST.md
+requirements.txt
+docs/screenshot.png
