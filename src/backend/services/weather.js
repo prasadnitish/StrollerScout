@@ -5,6 +5,24 @@
 const weatherCache = new Map();
 const CACHE_DURATION = 60 * 60 * 1000; // 1 hour
 const MAX_CACHE_SIZE = 100;
+const WEATHER_TIMEOUT_MS = 10000;
+
+async function fetchWithTimeout(url, options) {
+  // Prevents Weather.gov slow responses from hanging request handlers indefinitely.
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), WEATHER_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    return response;
+  } catch (error) {
+    if (error.name === "AbortError") {
+      throw new Error("Weather service timed out. Please try again.");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
 
 // Removes expired cache entries so memory stays bounded during long-running sessions.
 function cleanExpiredCache() {
@@ -59,7 +77,7 @@ export async function getWeatherForecast(lat, lon) {
     // Weather.gov requires a two-step flow:
     // 1) /points maps coordinates to the correct local forecast endpoint.
     // 2) The returned forecast URL provides period-by-period weather details.
-    const pointsResponse = await fetch(
+    const pointsResponse = await fetchWithTimeout(
       `https://api.weather.gov/points/${lat.toFixed(4)},${lon.toFixed(4)}`,
       {
         headers: {
@@ -77,7 +95,7 @@ export async function getWeatherForecast(lat, lon) {
     const pointsData = await pointsResponse.json();
     const forecastUrl = pointsData.properties.forecast;
 
-    const forecastResponse = await fetch(forecastUrl, {
+    const forecastResponse = await fetchWithTimeout(forecastUrl, {
       headers: {
         "User-Agent": "StrollerScout/1.0 (contact@strollerscout.app)",
       },
@@ -119,7 +137,9 @@ export async function getWeatherForecast(lat, lon) {
 
     return result;
   } catch (error) {
-    console.error("Weather fetch error:", error);
+    if (process.env.NODE_ENV !== "production") {
+      console.error("Weather fetch error:", error);
+    }
     throw new Error("Failed to fetch weather: " + error.message);
   }
 }

@@ -3,8 +3,8 @@
 **Project Name:** StrollerScout
 **Version:** 1.0 (Web MVP)
 **Author:** Nitish Prasad
-**Date:** January 2026
-**Status:** Planning
+**Date:** February 2026
+**Status:** MVP Complete
 
 ---
 
@@ -50,7 +50,7 @@ Parents planning trips with children face decision fatigue when packing:
 ### Success Metrics (MVP)
 
 - **Functional:** User can input trip details and receive AI-generated packing list
-- **Technical:** Successfully integrates Weather.gov API and Claude API
+- **Technical:** Successfully integrates Weather.gov API and AI packing/itinerary generation
 - **UX:** Clear, simple interface that works on desktop and mobile browsers
 - **Documentation:** Professional README, architecture docs, learnings
 
@@ -140,7 +140,7 @@ Parents planning trips with children face decision fatigue when packing:
 **Acceptance Criteria:**
 
 - [ ] Packing list saved to browser local storage
-- [ ] List persists across browser sessions
+- [ ] List persists across browser sessions (7-day TTL)
 - [ ] "Clear List" button to start fresh
 - [ ] Last modified date shown
 
@@ -153,9 +153,9 @@ Parents planning trips with children face decision fatigue when packing:
 1. **FR-1:** System shall resolve a natural-language destination into 1-3 suggested places
 2. **FR-2:** System shall accept trip dates (up to 14 days) and children ages
 3. **FR-3:** System shall fetch 7-day weather forecast from Weather.gov API
-4. **FR-4:** System shall generate a detailed itinerary and packing list using Claude API
+4. **FR-4:** System shall generate a detailed itinerary and packing list using AI API
 5. **FR-5:** System shall display packing list with checkboxes for user interaction
-6. **FR-6:** System shall save checklist state to browser local storage
+6. **FR-6:** System shall save checklist state to browser local storage (7-day TTL)
 7. **FR-7:** System shall provide print-friendly version of packing list
 8. **FR-8:** System shall provide car seat and booster seat guidance by US jurisdiction, based on child age/weight/height and destination state
 9. **FR-9:** System shall store jurisdiction safety rules with source URL, effective date, and data version for traceability
@@ -178,12 +178,12 @@ Parents planning trips with children face decision fatigue when packing:
 
 - **Frontend:** React (with Vite) or vanilla JavaScript
 - **Backend:** Node.js + Express (simple API server)
-- **APIs:** Weather.gov API (free, US-only), Claude API (Anthropic)
+- **APIs:** Weather.gov API (free, US-only), Anthropic AI API
 - **Storage:** Browser local storage for MVP
-- **Hosting:** Vercel or Netlify (free tier)
+- **Hosting:** Cloudflare Pages (frontend) + Railway (backend)
 - **Security:** Environment variables for API keys, no hardcoded secrets
 
-### Feature Build Status (Repo Evidence: February 15, 2026)
+### Feature Build Status (Repo Evidence: February 2026)
 
 | Feature | Status | Repo Evidence |
 | ------ | ------ | ------ |
@@ -194,10 +194,10 @@ Parents planning trips with children face decision fatigue when packing:
 | AI packing list generation | **Built** | `src/backend/services/packingListAI.js` + `/api/generate` in `src/backend/server.js` |
 | Interactive checklist + progress + print | **Built** | `src/frontend/src/components/PackingChecklist.jsx` |
 | Local persistence (trip + checked items) | **Built** | `localStorage` usage in `src/frontend/src/App.jsx` and `src/frontend/src/components/PackingChecklist.jsx` |
-| Car seat / booster rules by jurisdiction | **Not built** | No car safety rules service, dataset, or UI in repo |
-| Regulatory rules dataset with source/effective-date/version | **Not built** | No policy/rules data model or refresh pipeline in repo |
-| Trust layer (citation links + status tags) | **Not built** | No recommendation citation/status fields rendered in UI |
-| API outage fallback with stale-data messaging | **Not built** | Backend caches exist, but no explicit stale-data UX contract in current flows |
+| Car seat / booster rules by jurisdiction | **Built** | `src/backend/services/safetyRules.js` + `/api/safety/car-seat-check` in `src/backend/server.js`; `src/frontend/src/components/TravelSafetyCard.jsx` |
+| Regulatory rules dataset with source/effective-date/version | **Built** | `src/backend/services/safetyLawResearch.js` dataset with `sourceUrl`, `effectiveDate`, and `version` fields |
+| Trust layer (citation links + status tags) | **Built** | `TravelSafetyCard.jsx` renders source URL, effective date, and `Verified` / `Needs review` / `Unavailable` status tags |
+| API outage fallback with stale-data messaging | **Not built** | Backend caches exist; explicit stale-data UX contract not yet implemented |
 | Account + cloud sync | **Not built** | No auth, user model, or server-side persistence layer in repo |
 | Family profile memory for repeat trips | **Not built** | No profile entity/storage beyond single-trip localStorage |
 
@@ -205,7 +205,7 @@ Parents planning trips with children face decision fatigue when packing:
 
 ## User Flow
 
-```
+```text
 [Start]
    ↓
 [Input Trip Intent]
@@ -250,7 +250,7 @@ Parents planning trips with children face decision fatigue when packing:
 
 ### Screen 1: Trip Intent (Minimal Wizard + Sidebar)
 
-```
+```text
 ┌──────────────────────────────────────────────────────────────┐
 │ StrollerScout                                                 │
 │ Smart packing, minus the chaos                                │
@@ -266,7 +266,7 @@ Parents planning trips with children face decision fatigue when packing:
 
 ### Screen 2: Packing List
 
-```
+```text
 ┌─────────────────────────────────────┐
 │  Trip to Seattle, WA                │
 │  May 15-20, 2026 (5 days)          │
@@ -300,22 +300,22 @@ Parents planning trips with children face decision fatigue when packing:
 
 ### Dependencies
 
-- **Frontend:** React 18+ or Vanilla JS with modules
-- **Backend:** Express.js, node-fetch
+- **Frontend:** React 18+ with Vite
+- **Backend:** Express.js
 - **APIs:** @anthropic-ai/sdk, Weather.gov REST API
-- **Utilities:** date-fns (date handling), dotenv (environment variables)
+- **Utilities:** dotenv (environment variables)
 
 ### API Rate Limits
 
 - **Weather.gov:** No rate limit for reasonable use (recommended: cache for 1 hour)
-- **Claude API:** Tier-dependent (starter tier sufficient for MVP)
+- **AI API:** Tier-dependent; rate-limited at 30 requests / 15 minutes per IP at the application layer
 
 ### Risks & Mitigation
 
 | Risk                         | Impact | Probability | Mitigation                                   |
 | ---------------------------- | ------ | ----------- | -------------------------------------------- |
 | Weather API unavailable      | High   | Low         | Graceful fallback, cached data, error UI     |
-| Claude API slow/rate limited | Medium | Medium      | Loading indicator, timeout after 15 seconds  |
+| AI API slow/rate limited     | Medium | Medium      | Loading indicator, timeout after 15 seconds  |
 | Non-US location entered      | Medium | High        | Clear error message, suggest US destinations |
 | Browser local storage full   | Low    | Low         | Limit storage to 1 trip, clear old data      |
 
@@ -325,9 +325,9 @@ Parents planning trips with children face decision fatigue when packing:
 - [ ] How many past trips to save in local storage? (Suggest: 1 for MVP)
 - [ ] Should we add a "shopping list" feature without Amazon integration? (Simple text export?)
 
-### Technical Design: Car Safety Rules Engine (Proposed)
+### Technical Design: Car Safety Rules Engine
 
-**Implementation Status:** **Not built** (design only, no matching backend service or frontend UI in current repo)
+**Implementation Status:** **Built** — backend service, API endpoint, and frontend UI card shipped in MVP.
 
 #### Goal
 
@@ -340,7 +340,7 @@ Provide trip-specific car seat and booster guidance by US jurisdiction using chi
 - Source-backed output with `sourceUrl`, `effectiveDate`, and `lastUpdated`
 - Fallback states when jurisdiction data is unavailable or stale
 
-#### Data Schema (proposed)
+#### Data Schema
 
 | Entity | Key Fields | Notes |
 | ------ | ------ | ------ |
@@ -351,7 +351,7 @@ Provide trip-specific car seat and booster guidance by US jurisdiction using chi
 
 `requiredRestraint` enum (initial): `rear_facing`, `forward_facing_harness`, `booster`, `seat_belt`, `not_found`.
 
-#### Ingestion and Refresh Pipeline (proposed)
+#### Ingestion and Refresh Pipeline
 
 1. Maintain a jurisdiction source registry (`state -> official source URL`).
 2. Fetch source pages on a scheduled cadence (monthly) and on-demand for reported changes.
@@ -363,7 +363,7 @@ Provide trip-specific car seat and booster guidance by US jurisdiction using chi
 5. Publish new ruleset version and append changelog entry.
 6. Mark prior version superseded but queryable for audit.
 
-#### API Contract (proposed)
+#### API Contract
 
 `POST /api/safety/car-seat-check`
 
@@ -406,7 +406,7 @@ Error contracts:
 - `422` invalid child input (missing age/weight/height)
 - `503` upstream/source refresh unavailable -> return last known rules + stale flag when possible
 
-#### UI States (proposed)
+#### UI States
 
 | State | Trigger | User-facing behavior |
 | ------ | ------ | ------ |
@@ -415,13 +415,13 @@ Error contracts:
 | `Needs review` | Rule exists but stale/low-confidence metadata | Show warning banner and prompt to re-check before travel |
 | `Unavailable` | No ruleset for jurisdiction or request error | Show "Not found in repo data" style fallback and external resource link |
 
-#### Integration Points (proposed)
+#### Integration Points
 
-- **Frontend:** add "Travel Safety" card in results view below weather/itinerary
-- **Backend:** add `src/backend/services/safetyRules.js` and `/api/safety/car-seat-check`
-- **Data:** introduce versioned safety rules store (JSON for MVP, DB in V2)
+- **Frontend:** `src/frontend/src/components/TravelSafetyCard.jsx` renders in results view below weather/itinerary
+- **Backend:** `src/backend/services/safetyRules.js` + `/api/safety/car-seat-check` in `src/backend/server.js`
+- **Data:** `src/backend/services/safetyLawResearch.js` versioned safety rules dataset (JSON for MVP, DB in V2)
 
-#### Acceptance Criteria (proposed)
+#### Acceptance Criteria
 
 - 95%+ of valid US state queries return a deterministic recommendation with source metadata
 - Every rendered recommendation includes source URL and effective date
@@ -447,9 +447,9 @@ Error contracts:
 Because StrollerScout is a pre-trip planning and packing workflow (not a booking engine), this PRD sizes opportunity by **households served**, with a secondary spend context.
 
 - **TAM (households):** 13.337M US families with own children under 6
-- **SAM (serviceable digital segment):** 4.7M to 8.0M households  
+- **SAM (serviceable digital segment):** 4.7M to 8.0M households
   Assumption: 35% to 60% of TAM are active domestic leisure travelers in a given year and reachable by mobile/web planning tools.
-- **SOM (12-24 month target):** 33K to 133K households  
+- **SOM (12-24 month target):** 33K to 133K households
   Assumption: 0.25% to 1.0% TAM penetration via organic + partner channels.
 
 #### Monetization scenario framing (for roadmap decisions)
@@ -477,20 +477,13 @@ These are planning scenarios, not forecasts; they should be refined after MVP re
 | **Opportunities** | Partner integrations (family travel creators, baby gear services); premium family templates and reminders; expansion to international weather providers; B2B2C distribution with travel/hospitality partners |
 | **Threats** | Incumbent planner apps adding AI packing; platform changes/rate limits; rising acquisition costs in consumer travel apps; user trust concerns around AI recommendation accuracy |
 
-### Implications for Product Strategy
-
-1. **Positioning:** Lead with "family-specific planning + weather-aware packing" instead of generic AI trip planning.
-2. **Differentiation:** Prioritize child-age-aware templates, weather rationale transparency, and fast regeneration loops.
-3. **Go-to-market:** Test partnerships with family travel communities and gear-rental ecosystems before paid acquisition.
-4. **Defensibility:** Build compounding advantage from family trip patterns, checklist completion behavior, and saved preferences.
-
 ### SWOT Coverage Backlog (What to Add Next)
 
 | Priority | Addition | Status | Why it covers SWOT gaps |
 | ------ | ------ | ------ | ------ |
-| **P0** | Jurisdiction-specific car seat and booster rule checker | **Not built** | Converts safety risk into a differentiated trust feature for families |
-| **P0** | Regulatory rules data pipeline (source URL + effective date + version) | **Not built** | Reduces legal/accuracy risk and supports auditable updates |
-| **P0** | Safety recommendation transparency (citations, `last updated`, status tags) | **Not built** | Improves user trust and defensibility against generic AI tools |
+| **P0** | Jurisdiction-specific car seat and booster rule checker | **Built** | Backend service + API endpoint + TravelSafetyCard UI shipped in MVP |
+| **P0** | Regulatory rules data pipeline (source URL + effective date + version) | **Built** | Static ruleset with `sourceUrl`, `effectiveDate`, `version` in `safetyLawResearch.js` |
+| **P0** | Safety recommendation transparency (citations, `last updated`, status tags) | **Built** | `TravelSafetyCard.jsx` renders source URL, effective date, and status tags |
 | **P1** | Outage/stale-data fallback UX across weather and safety modules | **Not built** | Mitigates API dependency weakness and reliability threats |
 | **P1** | Optional account + cloud sync | **Not built** | Closes cross-device weakness and improves retention |
 | **P2** | Family profile memory + reusable templates | **Not built** | Increases repeat-use moat and lowers planning friction over time |
@@ -501,44 +494,44 @@ These are planning scenarios, not forecasts; they should be refined after MVP re
 
 ### Week 1: Foundation & Core Features
 
-**Day 1-2: Setup & Trip Input**
+#### Day 1-2: Setup & Trip Input
 
 - [ ] Project structure setup (React + Express)
 - [ ] Environment variables configuration
 - [ ] Trip input form with validation
 - [ ] Basic styling (mobile-first)
 
-**Day 3-4: Weather Integration**
+#### Day 3-4: Weather Integration
 
 - [ ] Weather.gov API integration
 - [ ] Geocoding (lat/long from city name)
 - [ ] Weather display component
 - [ ] Error handling
 
-**Day 5-7: AI Packing List**
+#### Day 5-7: AI Packing List
 
-- [ ] Claude API integration
+- [ ] AI API integration
 - [ ] Prompt engineering for packing list
 - [ ] Display categorized list
 - [ ] Interactive checklist (check/uncheck)
 
 ### Week 2: Polish & Documentation
 
-**Day 8-10: Features & Testing**
+#### Day 8-10: Features & Testing
 
 - [ ] Local storage persistence
 - [ ] Print functionality
 - [ ] Loading states and error handling
 - [ ] Cross-browser testing
 
-**Day 11-12: Documentation**
+#### Day 11-12: Documentation
 
 - [ ] README with setup instructions and screenshots
 - [ ] ARCHITECTURE.md with system design
 - [ ] Security review (no hardcoded keys)
-- [ ] Deploy to Vercel/Netlify
+- [ ] Deploy to Cloudflare Pages + Railway
 
-**Day 13-14: Buffer & Learnings**
+#### Day 13-14: Buffer & Learnings
 
 - [ ] Bug fixes
 - [ ] Performance optimization
@@ -552,9 +545,7 @@ These are planning scenarios, not forecasts; they should be refined after MVP re
 ### References
 
 - [Weather.gov API Documentation](https://www.weather.gov/documentation/services-web-api)
-- [Claude API Documentation](https://docs.anthropic.com/claude/reference/messages_post)
-- [TPM Portfolio Guidelines](../.claude-instructions.md)
-- [Security Guidelines](../SECURITY_GUIDELINES.md)
+- [Anthropic API Documentation](https://docs.anthropic.com/claude/reference/messages_post)
 - [US Census QuickFacts: United States](https://www.census.gov/quickfacts/)
 - [BLS CPS Table 4 (Families with own children, 2024)](https://www.bls.gov/news.release/famee.t04.htm)
 - [US Travel Forecasts (Fall 2025 update)](https://www.ustravel.org/research/travel-forecasts)

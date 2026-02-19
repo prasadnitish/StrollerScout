@@ -17,7 +17,9 @@ const geocodeCache = new Map();
 const suggestionCache = new Map();
 
 // Test helper to reset in-memory caches between test cases.
+// No-op outside of the test environment so the export is safe to leave on the module.
 export function __resetGeocodingCachesForTests() {
+  if (process.env.NODE_ENV !== "test") return;
   geocodeCache.clear();
   suggestionCache.clear();
 }
@@ -316,12 +318,21 @@ async function buildNearbyResult(parsed, baseCoords, cacheKey) {
 }
 
 export async function resolveDestinationQuery(input) {
-  // Public API helper: resolve free-text destination intent into direct mode or suggestions.
-  const cacheKey = input.trim().toLowerCase();
+  // Public API helper: validate input length and resolve free-text destination intent into direct mode or suggestions.
+  const trimmed = String(input || "").trim();
+  
+  if (trimmed.length < 2) {
+    throw new Error("Destination must be at least 2 characters");
+  }
+  if (trimmed.length > 500) {
+    throw new Error("Destination is too long (max 500 characters)");
+  }
+
+  const cacheKey = trimmed.toLowerCase();
   const cached = getCache(suggestionCache, cacheKey);
   if (cached) return cached;
 
-  const parsed = parseLocationQuery(input);
+  const parsed = parseLocationQuery(trimmed);
 
   if (parsed.type === "city") {
     const coords = await geocodeLocation(parsed.query);

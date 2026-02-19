@@ -24,14 +24,31 @@ dotenv.config();
 
 const DEFAULT_PORT = process.env.PORT || 3000;
 
-if (!process.env.ANTHROPIC_API_KEY) {
-  console.warn("WARNING: ANTHROPIC_API_KEY is not set in .env file");
+// Validate required environment variables at startup
+function validateEnvironmentVariables() {
+  if (!process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY === "your_api_key_here") {
+    console.error("FATAL: ANTHROPIC_API_KEY must be set and valid in environment variables");
+    console.error("Please set ANTHROPIC_API_KEY in your .env file or environment.");
+    process.exit(1);
+  }
+}
+
+function validateProductionEnvironment() {
+  if (process.env.NODE_ENV !== "production") return;
+  
+  const allowedOrigins = (process.env.ALLOWED_ORIGINS || "").split(",").map(s => s.trim()).filter(Boolean);
+  if (allowedOrigins.length === 0) {
+    console.error("FATAL: ALLOWED_ORIGINS is empty in production mode.");
+    console.error("Please set ALLOWED_ORIGINS to your frontend domain(s) in your deployment environment.");
+    console.error("Example: ALLOWED_ORIGINS=https://myapp.cloudflare.app,https://www.myapp.com");
+    process.exit(1);
+  }
 }
 
 function buildAllowedOrigins() {
   // Keeps local dev friction low while enforcing explicit allow-lists in production.
   return process.env.NODE_ENV === "production"
-    ? (process.env.ALLOWED_ORIGINS || "").split(",").filter(Boolean)
+    ? (process.env.ALLOWED_ORIGINS || "").split(",").map((s) => s.trim()).filter(Boolean)
     : [
         "http://localhost:5173",
         "http://localhost:3000",
@@ -80,7 +97,9 @@ export function createApp(deps = {}) {
     }),
   );
 
-  app.use(express.json());
+  // Enforce reasonable request body size limits to prevent memory exhaustion attacks
+  app.use(express.json({ limit: "10kb" }));
+  app.use(express.urlencoded({ limit: "10kb", extended: false }));
 
   app.use((req, res, next) => {
     res.setHeader("X-Content-Type-Options", "nosniff");
@@ -106,7 +125,7 @@ export function createApp(deps = {}) {
 
   const apiLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 10,
+    max: 30,  // Increased from 10 to 30: ~5 complete trip plans per window (resolve + plan + generate + car-seat = 4 calls/trip)
     message: {
       error: "Too many requests from this IP, please try again in 15 minutes.",
     },
@@ -140,11 +159,11 @@ export function createApp(deps = {}) {
       const result = await resolveDestinationQueryFn(rawQuery);
       return res.json(result);
     } catch (error) {
-      console.error("Error in /api/resolve-destination:", error);
+      if (process.env.NODE_ENV !== "production") {
+        console.error("Error in /api/resolve-destination:", error);
+      }
       return res.status(500).json({
         error: "Failed to resolve destination. Please try again.",
-        details:
-          process.env.NODE_ENV === "development" ? error.message : undefined,
       });
     }
   });
@@ -170,23 +189,16 @@ export function createApp(deps = {}) {
           ? activities
           : ["family-friendly", "parks", "city"];
 
-      if (
-        !process.env.ANTHROPIC_API_KEY ||
-        process.env.ANTHROPIC_API_KEY === "your_api_key_here"
-      ) {
-        return res.status(500).json({
-          error:
-            "API key not configured. Please set ANTHROPIC_API_KEY in .env file.",
-        });
-      }
+      // Note: API key validation is performed at startup via validateEnvironmentVariables()
+      // This graceful check is for extra safety but should never be reached in production
 
-      devLog(`Generating trip plan for ${destination}...`);
+      devLog(`Generating trip plan...`);
 
       const coords = await geocodeLocationFn(destination);
       devLog(`Geocoded to: ${coords.lat}, ${coords.lon}`);
 
       const weather = await getWeatherForecastFn(coords.lat, coords.lon);
-      devLog(`Weather fetched: ${weather.summary}`);
+      devLog(`Weather fetched successfully`);
 
       const tripPlan = await generateTripPlanFn(
         {
@@ -199,7 +211,7 @@ export function createApp(deps = {}) {
         weather,
       );
       devLog(
-        `Trip plan generated with ${tripPlan?.suggestedActivities?.length ?? 0} activities`,
+        `Trip plan generated successfully`,
       );
 
       const tripDuration = Math.ceil(
@@ -221,7 +233,9 @@ export function createApp(deps = {}) {
         tripPlan,
       });
     } catch (error) {
-      console.error("Error in /api/trip-plan:", error);
+      if (process.env.NODE_ENV !== "production") {
+        console.error("Error in /api/trip-plan:", error);
+      }
 
       if (
         error.message.includes("Location not found") ||
@@ -248,8 +262,6 @@ export function createApp(deps = {}) {
 
       res.status(500).json({
         error: "Failed to generate trip plan. Please try again.",
-        details:
-          process.env.NODE_ENV === "development" ? error.message : undefined,
       });
     }
   });
@@ -271,30 +283,23 @@ export function createApp(deps = {}) {
       const { destination, startDate, endDate, activities, children } =
         sanitizedData;
 
-      if (
-        !process.env.ANTHROPIC_API_KEY ||
-        process.env.ANTHROPIC_API_KEY === "your_api_key_here"
-      ) {
-        return res.status(500).json({
-          error:
-            "API key not configured. Please set ANTHROPIC_API_KEY in .env file.",
-        });
-      }
+      // Note: API key validation is performed at startup via validateEnvironmentVariables()
+      // This graceful check is for extra safety but should never be reached in production
 
-      devLog(`Generating packing list for ${destination}...`);
+      devLog(`Generating packing list...`);
 
       const coords = await geocodeLocationFn(destination);
-      devLog(`Geocoded to: ${coords.lat}, ${coords.lon}`);
+      devLog(`Geocoded coordinates obtained`);
 
       const weather = await getWeatherForecastFn(coords.lat, coords.lon);
-      devLog(`Weather fetched: ${weather.summary}`);
+      devLog(`Weather fetched successfully`);
 
       const packingList = await generatePackingListFn(
         { destination, startDate, endDate, activities, children },
         weather,
       );
       devLog(
-        `Packing list generated with ${packingList?.categories?.length ?? 0} categories`,
+        `Packing list generated successfully`,
       );
 
       const tripDuration = Math.ceil(
@@ -316,7 +321,9 @@ export function createApp(deps = {}) {
         packingList,
       });
     } catch (error) {
-      console.error("Error in /api/generate:", error);
+      if (process.env.NODE_ENV !== "production") {
+        console.error("Error in /api/generate:", error);
+      }
 
       if (
         error.message.includes("Location not found") ||
@@ -343,8 +350,6 @@ export function createApp(deps = {}) {
 
       res.status(500).json({
         error: "Failed to generate packing list. Please try again.",
-        details:
-          process.env.NODE_ENV === "development" ? error.message : undefined,
       });
     }
   });
@@ -378,11 +383,11 @@ export function createApp(deps = {}) {
 
       return res.json(guidance);
     } catch (error) {
-      console.error("Error in /api/safety/car-seat-check:", error);
+      if (process.env.NODE_ENV !== "production") {
+        console.error("Error in /api/safety/car-seat-check:", error);
+      }
       return res.status(500).json({
         error: "Failed to evaluate car seat guidance. Please try again.",
-        details:
-          process.env.NODE_ENV === "development" ? error.message : undefined,
       });
     }
   });
@@ -396,6 +401,10 @@ export function createApp(deps = {}) {
 
 export function startServer(port = DEFAULT_PORT, deps = {}) {
   // Runtime entrypoint used by local dev/prod boot while reusing createApp().
+  // Validate environment before attempting to start the app
+  validateEnvironmentVariables();
+  validateProductionEnvironment();
+  
   const app = createApp(deps);
   const server = app.listen(port, () => {
     console.log(`StrollerScout API server running on http://localhost:${port}`);

@@ -32,27 +32,36 @@ function parseOptionalNumber(value, min, max) {
 }
 
 export function sanitizeChildren(children, maxLength = 10) {
-  // Clamps child profile data to safe ranges used by AI prompts and safety rules.
+  // Clamps child profile data to safe ranges; strictly validates age to prevent prompt injection.
   if (!Array.isArray(children)) return [];
 
-  return children.slice(0, maxLength).map((child) => {
-    const safeChild = {
-      age: Math.max(0, Math.min(18, parseInt(child.age) || 0)),
-    };
+  return children.slice(0, maxLength)
+    .map((child) => {
+      // Validate age is numeric integer (not injection attempt like "5), ignore")
+      const ageNum = Number.parseInt(String(child.age), 10);
+      if (!Number.isFinite(ageNum)) {
+        // Skip children with non-numeric ages to prevent injection
+        return null;
+      }
 
-    const safeWeightLb = parseOptionalNumber(child.weightLb, 2, 300);
-    const safeHeightIn = parseOptionalNumber(child.heightIn, 10, 90);
+      const safeChild = {
+        age: Math.max(0, Math.min(18, ageNum)),
+      };
 
-    if (safeWeightLb !== null) {
-      safeChild.weightLb = safeWeightLb;
-    }
+      const safeWeightLb = parseOptionalNumber(child.weightLb, 2, 300);
+      const safeHeightIn = parseOptionalNumber(child.heightIn, 10, 90);
 
-    if (safeHeightIn !== null) {
-      safeChild.heightIn = safeHeightIn;
-    }
+      if (safeWeightLb !== null) {
+        safeChild.weightLb = safeWeightLb;
+      }
 
-    return safeChild;
-  });
+      if (safeHeightIn !== null) {
+        safeChild.heightIn = safeHeightIn;
+      }
+
+      return safeChild;
+    })
+    .filter(child => child !== null);
 }
 
 export function sanitizeTripData(data) {
@@ -61,8 +70,8 @@ export function sanitizeTripData(data) {
 
   const sanitized = {
     destination: sanitizeString(safeData.destination, 100),
-    startDate: safeData.startDate, // ISO dates are safe
-    endDate: safeData.endDate,
+    startDate: sanitizeString(String(safeData.startDate ?? ""), 30),
+    endDate: sanitizeString(String(safeData.endDate ?? ""), 30),
     activities: sanitizeArray(safeData.activities),
     children: [],
   };
@@ -95,6 +104,20 @@ export function validateTripData(data, options = {}) {
 
   if (start >= end) {
     errors.push("End date must be after start date");
+  }
+
+  // Validate dates are not in the past
+  const now = new Date();
+  now.setHours(0, 0, 0, 0); // Compare dates only, not time
+  if (!isNaN(start.getTime()) && start < now) {
+    errors.push("Start date cannot be in the past");
+  }
+
+  // Prevent abusive requests for trips far in future (> 2 years)
+  const maxFutureDate = new Date();
+  maxFutureDate.setFullYear(maxFutureDate.getFullYear() + 2);
+  if (!isNaN(end.getTime()) && end > maxFutureDate) {
+    errors.push("End date cannot be more than 2 years in the future");
   }
 
   const duration = Math.ceil((end - start) / (1000 * 60 * 60 * 24));

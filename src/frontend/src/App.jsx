@@ -82,12 +82,24 @@ function App() {
     };
   };
 
-  // Restore previous trip from localStorage.
+  // Restore previous trip from localStorage, subject to a 7-day TTL.
+  const SAVED_TRIP_TTL_MS = 7 * 24 * 60 * 60 * 1000;
   useEffect(() => {
     const savedData = localStorage.getItem("strollerscout_trip");
     if (savedData) {
       try {
         const parsed = JSON.parse(savedData);
+
+        // Purge stale data so children's personal details don't linger indefinitely.
+        if (parsed.lastModified) {
+          const ageMs = Date.now() - new Date(parsed.lastModified).getTime();
+          if (ageMs > SAVED_TRIP_TTL_MS) {
+            localStorage.removeItem("strollerscout_trip");
+            localStorage.removeItem("strollerscout_checked");
+            return;
+          }
+        }
+
         if (parsed.trip) {
           setTripData(parsed.trip);
           setTripPlan(parsed.tripPlan);
@@ -748,7 +760,7 @@ function App() {
         </main>
 
         <footer className="mt-12 text-center text-xs uppercase tracking-[0.2em] text-muted">
-          Built with React, Vite, Weather.gov, and Claude
+          Built with React, Vite, and Weather.gov
         </footer>
       </div>
     </div>

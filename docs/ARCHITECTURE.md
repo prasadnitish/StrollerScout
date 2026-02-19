@@ -6,7 +6,7 @@ StrollerScout is a **client-server web application** that helps parents transfor
 
 - **Frontend (React/Vite):** Single-page application for user interaction
 - **Backend (Node.js/Express):** API server that orchestrates external API calls
-- **External APIs:** Weather.gov (forecast data), Claude API (itinerary + packing lists), OpenStreetMap (Nominatim + Overpass for location resolution)
+- **External APIs:** Weather.gov (forecast data), AI API (itinerary + packing lists), OpenStreetMap (Nominatim + Overpass for location resolution)
 - **Storage:** Browser local storage (no database required for MVP)
 
 **Architecture Pattern:** Simple 3-tier architecture (Presentation → API Layer → External Services)
@@ -24,6 +24,7 @@ StrollerScout is a **client-server web application** that helps parents transfor
 │  │  - Weather Display                         │ │
 │  │  - Itinerary Display                        │ │
 │  │  - Packing Checklist                       │ │
+│  │  - Travel Safety Card                      │ │
 │  │  - Local Storage Manager                   │ │
 │  └────────────┬───────────────────────────────┘ │
 └───────────────┼──────────────────────────────────┘
@@ -32,21 +33,23 @@ StrollerScout is a **client-server web application** that helps parents transfor
 ┌──────────────────────────────────────────────────┐
 │        Backend API Server (Express)              │
 │  ┌────────────────────────────────────────────┐ │
-│  │  /api/resolve-destination - NLP location   │ │
-│  │  /api/trip-plan            - Itinerary     │ │
-│  │  /api/generate             - Packing list  │ │
+│  │  GET  /api/health                          │ │
+│  │  POST /api/resolve-destination             │ │
+│  │  POST /api/trip-plan                       │ │
+│  │  POST /api/generate                        │ │
+│  │  POST /api/safety/car-seat-check           │ │
 │  └────┬──────────────────────┬────────────────┘ │
 └───────┼──────────────────────┼───────────────────┘
         │                      │
         ▼                      ▼
 ┌──────────────────┐   ┌────────────────────┐
-│   Weather.gov    │   │   Claude API       │
-│   (NWS API)      │   │   (Anthropic)      │
-│                  │   │                    │
-│  - Forecast data │   │  - Itinerary +     │
-│  - US locations  │   │    packing lists   │
-└──────────────────┘   └────────────────────┘
-        ▲
+│   Weather.gov    │   │   AI API           │
+│   (NWS API)      │   │                    │
+│                  │   │  - Itinerary +     │
+│  - Forecast data │   │    packing lists   │
+│  - US locations  │   │  - Car seat law    │
+└──────────────────┘   │    research        │
+        ▲              └────────────────────┘
         │
 ┌────────────────────────────────────────┐
 │ OpenStreetMap (Nominatim + Overpass)   │
@@ -60,29 +63,33 @@ StrollerScout is a **client-server web application** that helps parents transfor
 
 ### Flow 1: Resolve Destination + Generate Plan (Happy Path)
 
-1. **User enters destination intent** → Frontend calls `/api/resolve-destination`
+1. **User enters destination intent** → Frontend calls `POST /api/resolve-destination`
 2. **Backend → OpenStreetMap:** Geocode base city + fetch nearby city suggestions
 3. **Frontend displays suggestions** → User selects a destination
-4. **Frontend → Backend:** POST `/api/trip-plan` with destination + dates + kids
+4. **Frontend → Backend:** `POST /api/trip-plan` with destination + dates + kids
 5. **Backend → Weather.gov:** Fetch 7-day forecast using lat/lon
-6. **Backend → Claude API:** Generate structured itinerary
-7. **Frontend → Backend:** POST `/api/generate` with selected activities
-8. **Backend → Claude API:** Generate packing list
-9. **Frontend displays:** Weather, itinerary, packing checklist
+6. **Backend → AI API:** Generate structured itinerary
+7. **Frontend displays itinerary** → User reviews and optionally selects activities
+8. **Frontend → Backend (parallel):**
+   - `POST /api/generate` with selected activities → AI generates packing list
+   - `POST /api/safety/car-seat-check` with children profiles → returns jurisdiction-specific guidance
+9. **Frontend displays:** Weather, itinerary, car seat guidance, packing checklist
 10. **Frontend saves:** Trip + packing list + checked items → browser local storage
 
 ### Flow 2: Load Saved List
 
 1. **User returns to site** → Frontend checks local storage
-2. **If list exists:** Load trip details, packing items, checked state
-3. **Display saved list** → User continues packing
+2. **TTL check:** If `lastModified` is older than 7 days, purge and show fresh wizard
+3. **If list is valid:** Load trip details, packing items, checked state
+4. **Display saved list** → User continues packing
 
 ### Flow 3: Error Handling
 
-- **Invalid location:** Backend returns error → Frontend shows "Please enter a US city"
-- **Weather API down:** Backend uses cached data or returns graceful error
-- **Claude API timeout:** Frontend shows retry button after 15 seconds
-- **Location suggestions unavailable:** Frontend falls back to direct city input
+- **Invalid location:** Backend returns 422 → Frontend shows "Please enter a US city"
+- **Weather API down:** Backend returns graceful error → Frontend shows retry message
+- **AI API timeout:** Frontend shows error after 30-second client timeout
+- **Location suggestions unavailable:** Overpass failure falls back silently to direct city mode
+- **Car seat jurisdiction missing:** Returns `status: "Unavailable"` with source link
 
 ---
 
@@ -103,7 +110,7 @@ StrollerScout is a **client-server web application** that helps parents transfor
 **Rationale:**
 
 - **Faster development:** 1-2 weeks vs 4-6 weeks for mobile
-- **Easier deployment:** Vercel/Netlify vs App Store approval
+- **Easier deployment:** Cloudflare Pages vs App Store approval
 - **Better for demos:** Share URL in interviews vs installing app
 - **Still mobile-friendly:** Responsive design works on phone browsers
 - **Future extensibility:** Can build React Native app in V2 using same backend
@@ -125,14 +132,14 @@ StrollerScout is a **client-server web application** that helps parents transfor
 
 - **Simplicity:** No database setup, migrations, or hosting
 - **MVP sufficient:** Users only need 1 trip at a time
-- **Privacy:** Data stays on user's device
+- **Privacy:** Data stays on user's device; 7-day TTL auto-purges children's data
 - **Cost:** Free (no database hosting)
 - **Trade-off:** Data lost if user clears browser, no cross-device sync
 - **V2 path:** Can add Firebase for cloud sync later
 
 ### Decision 3: Server-Side API Proxy (Backend)
 
-**Context:** Need to call Weather.gov and Claude APIs.
+**Context:** Need to call Weather.gov and the AI API.
 
 **Options Considered:**
 
@@ -144,7 +151,7 @@ StrollerScout is a **client-server web application** that helps parents transfor
 
 **Rationale:**
 
-- **Security:** Cannot expose Claude API key in frontend code
+- **Security:** Cannot expose AI API key in frontend code
 - **Rate limiting:** Control API usage from single point
 - **Caching:** Cache weather data for 1 hour to reduce API calls
 - **Error handling:** Graceful fallbacks and retries
@@ -170,25 +177,24 @@ StrollerScout is a **client-server web application** that helps parents transfor
 - **Trade-off:** Non-US users see error message
 - **V2 path:** Can add OpenWeatherMap for international support
 
-### Decision 5: Claude API for Packing List Generation
+### Decision 5: AI API for Packing List and Itinerary Generation
 
-**Context:** Need AI to generate context-aware packing lists.
+**Context:** Need AI to generate context-aware packing lists and itineraries.
 
 **Options Considered:**
 
-1. Claude API (Anthropic)
+1. Anthropic AI API
 2. OpenAI GPT-4
 3. Rule-based logic (no AI)
 
-**Decision:** Claude API
+**Decision:** Anthropic AI API
 
 **Rationale:**
 
 - **Quality:** Excellent at structured tasks (JSON output)
 - **Context window:** Large enough for full weather + activities
-- **Cost-effective:** Cheaper than GPT-4 for this use case
+- **Cost-effective:** Haiku model is fast and economical for this use case
 - **Portfolio value:** Shows modern AI integration
-- **Personal factor:** Original brief already designed for Claude
 
 ### Decision 6: Natural-Language Location + Suggestions
 
@@ -211,6 +217,20 @@ StrollerScout is a **client-server web application** that helps parents transfor
 ---
 
 ## API Endpoints
+
+### GET /api/health
+
+**Description:** Liveness probe for hosting health checks
+
+**Response:**
+
+```json
+{
+  "status": "ok",
+  "message": "StrollerScout API is running",
+  "timestamp": "2026-02-15T10:00:00.000Z"
+}
+```
 
 ### POST /api/resolve-destination
 
@@ -272,7 +292,9 @@ StrollerScout is a **client-server web application** that helps parents transfor
     "destination": "Seattle, WA",
     "duration": 5,
     "startDate": "2026-05-15",
-    "endDate": "2026-05-20"
+    "endDate": "2026-05-20",
+    "jurisdictionCode": "WA",
+    "jurisdictionName": "Washington"
   },
   "weather": {
     "summary": "Expect temperatures between 52°F and 66°F with possible rain."
@@ -284,9 +306,13 @@ StrollerScout is a **client-server web application** that helps parents transfor
         "id": "activity-1",
         "name": "Pike Place Market",
         "category": "city",
-        "duration": "2-3 hours"
+        "duration": "2-3 hours",
+        "kidFriendly": true,
+        "weatherDependent": false
       }
-    ]
+    ],
+    "dailyItinerary": [...],
+    "tips": [...]
   }
 }
 ```
@@ -311,12 +337,7 @@ StrollerScout is a **client-server web application** that helps parents transfor
 
 ```json
 {
-  "trip": {
-    "destination": "Seattle, WA",
-    "duration": 5,
-    "startDate": "2026-05-15",
-    "endDate": "2026-05-20"
-  },
+  "trip": { "destination": "Seattle, WA", "duration": 5, ... },
   "weather": {
     "forecast": [
       {
@@ -326,7 +347,6 @@ StrollerScout is a **client-server web application** that helps parents transfor
         "condition": "Partly Cloudy",
         "precipitation": 40
       }
-      // ... 7 days
     ],
     "summary": "Expect cool temps (50-65°F) with 40-70% rain chance"
   },
@@ -337,53 +357,60 @@ StrollerScout is a **client-server web application** that helps parents transfor
         "items": [
           {
             "name": "Rain jackets",
-            "quantity": 2,
+            "quantity": "2",
             "reason": "High rain probability Wed-Fri"
-          },
-          {
-            "name": "Long pants",
-            "quantity": 3,
-            "reason": "Cool temperatures expected"
-          }
-        ]
-      },
-      {
-        "name": "Toiletries",
-        "items": [
-          {
-            "name": "Diapers",
-            "quantity": "20-25",
-            "reason": "For 2-year-old, 5 days"
           }
         ]
       }
-      // ... more categories
     ]
   }
 }
 ```
 
-**Error Responses:**
+### POST /api/safety/car-seat-check
 
-- **400:** Invalid input (missing fields, invalid dates)
-- **422:** Non-US location (Weather.gov limitation)
-- **500:** API failure (weather or Claude unavailable)
-- **504:** Timeout (Claude API took > 15 seconds)
+**Description:** Return jurisdiction-specific car seat and booster guidance for each child
 
-### GET /api/geocode?location=Seattle,WA
+**Request:**
 
-**Description:** Convert city name to coordinates
+```json
+{
+  "destination": "Seattle, WA",
+  "jurisdictionCode": "WA",
+  "tripDate": "2026-05-15",
+  "children": [{ "age": 2, "weightLb": 28, "heightIn": 34 }]
+}
+```
 
 **Response:**
 
 ```json
 {
-  "lat": 47.6062,
-  "lon": -122.3321,
-  "city": "Seattle",
-  "state": "WA"
+  "status": "Needs review",
+  "jurisdictionCode": "WA",
+  "jurisdictionName": "Washington",
+  "sourceUrl": "https://wtsc.wa.gov/child-passenger-safety/",
+  "effectiveDate": "Not found in repo",
+  "lastUpdated": "2026-02-15",
+  "results": [
+    {
+      "childId": "child-1",
+      "ageYears": 2,
+      "status": "Needs review",
+      "requiredRestraint": "rear_facing",
+      "requiredRestraintLabel": "Rear-facing car seat",
+      "seatPosition": "rear_seat_required_if_available",
+      "rationale": "Age matched but weight/height details are incomplete.",
+      "sourceUrl": "https://wtsc.wa.gov/child-passenger-safety/"
+    }
+  ]
 }
 ```
+
+**Error Responses:**
+
+- **400:** Missing or empty children array
+- **500:** Internal evaluation failure
 
 ---
 
@@ -394,32 +421,31 @@ StrollerScout is a **client-server web application** that helps parents transfor
 ```typescript
 interface TripInput {
   destination: string;
-  startDate: string; // ISO date
+  startDate: string; // ISO date string (e.g. "2026-05-15")
   endDate: string;
-  activities: string[]; // ['beach', 'hiking', 'city', 'indoor']
-  children: { age: number }[];
+  activities: string[];
+  children: { age: number; weightLb?: number; heightIn?: number }[];
 }
 
 interface WeatherForecast {
   date: string;
   high: number;
-  low: number;
+  low: number | null; // null when night period is unavailable
   condition: string;
-  precipitation: number; // percentage
+  precipitation: number; // percentage 0-100
 }
 
 interface PackingItem {
-  id: string;
   name: string;
-  quantity: string | number;
+  quantity: string;
   reason: string;
-  checked: boolean; // user's progress
+  // Note: item IDs are computed client-side as "${category.name}-${catIndex}-${itemIndex}"
+  // and are not part of the API response.
 }
 
 interface PackingCategory {
   name: string;
   items: PackingItem[];
-  collapsed: boolean; // UI state
 }
 ```
 
@@ -428,15 +454,20 @@ interface PackingCategory {
 ```json
 {
   "strollerscout_trip": {
-    "trip": { ...TripInput },
-    "weather": { forecast: [...], summary: "..." },
-    "packingList": { categories: [...] },
+    "trip": { "destination": "...", "startDate": "...", "endDate": "...", "children": [...], "jurisdictionCode": "WA", "jurisdictionName": "Washington", "duration": 5 },
+    "weather": { "forecast": [...], "summary": "..." },
+    "tripPlan": { "overview": "...", "suggestedActivities": [...], "dailyItinerary": [...], "tips": [...] },
+    "packingList": { "categories": [...] },
+    "safetyGuidance": { "status": "Needs review", "results": [...] },
     "lastModified": "2026-05-10T14:32:00Z"
-  }
+  },
+  "strollerscout_checked": ["Clothing-0-0", "Clothing-0-1", ...]
 }
 ```
 
-**Storage limits:** ~5-10MB (local storage limit), should store 1 trip easily
+**Storage limits:** ~5-10MB (local storage limit), well within bounds for one trip.
+
+**TTL:** Data older than 7 days is automatically purged on next page load.
 
 ---
 
@@ -444,31 +475,42 @@ interface PackingCategory {
 
 ### API Key Protection
 
-- ✅ **Claude API key stored in environment variables** (`.env` file)
+- ✅ **AI API key stored in environment variables** (`.env` file)
 - ✅ **Never exposed to frontend** (backend proxy pattern)
 - ✅ **`.env` in `.gitignore`** (never committed)
 - ✅ **`.env.example` provided** (without real keys)
+- ✅ **Startup validation:** Server exits immediately if key is missing or placeholder
 
 ### Input Validation
 
-- ✅ **Frontend validation:** Date ranges, required fields
-- ✅ **Backend validation:** Sanitize user input before API calls
-- ✅ **Rate limiting:** Limit requests per IP (prevent abuse)
+- ✅ **Frontend validation:** Date ranges, required fields, client-side clamping
+- ✅ **Backend sanitization:** All string fields through `sanitizeString`; dates sanitized and injection-stripped before reaching AI prompts
+- ✅ **Rate limiting:** 30 requests per 15 minutes per IP across all AI endpoints
+- ✅ **Request body size limit:** 10 KB cap to prevent payload exhaustion
+
+### AI Prompt Security
+
+- ✅ **System/user separation:** Static instructions sent via `system:` parameter; only trip data in user message
+- ✅ **Injection marker stripping:** `IGNORE PREVIOUS`, `SYSTEM:`, `ASSISTANT:` removed from all user inputs
+- ✅ **Temperature 0:** Deterministic structured JSON output minimises off-rails responses
 
 ### XSS Prevention
 
 - ✅ **React auto-escapes:** User input automatically sanitized
 - ✅ **No `dangerouslySetInnerHTML`:** Avoid unsafe HTML rendering
+- ✅ **Security headers:** `X-Content-Type-Options`, `X-Frame-Options`, `X-XSS-Protection`, HSTS in production
 
 ### CORS Configuration
 
-- ✅ **Specific origin:** Only allow frontend domain
-- ✅ **Production:** Restrict to deployed frontend URL
+- ✅ **Production:** Enforces explicit `ALLOWED_ORIGINS` allowlist
+- ✅ **Dev:** Only allows localhost origins
+- ✅ **Startup guard:** Server exits if `ALLOWED_ORIGINS` is empty in production mode
 
 ### Weather.gov API
 
 - ✅ **No authentication required** (public API)
-- ✅ **Respect rate limits:** Cache responses for 1 hour
+- ✅ **Respect rate limits:** Cache responses for 1 hour (in-memory)
+- ✅ **Timeout:** Both Weather.gov fetch calls have a 10-second AbortController timeout
 
 ---
 
@@ -476,22 +518,21 @@ interface PackingCategory {
 
 ### Caching Strategy
 
-- **Weather data:** Cache for 1 hour per location (in-memory or Redis)
-- **Geocoding:** Cache city → coordinates (rarely changes)
-- **Claude API:** No caching (each list is unique per trip)
+- **Weather data:** In-memory cache, 1 hour TTL, max 100 entries (LRU eviction)
+- **Geocoding:** In-memory cache, 6 hour TTL, max 500 entries
+- **AI API:** No caching (each list is unique per trip)
 
 ### Response Times
 
 - **Weather API:** ~500ms
-- **Claude API:** ~3-5 seconds (LLM generation)
-- **Total:** ~5-6 seconds for packing list generation
-- **Optimization:** Show weather immediately, stream packing list as it generates
+- **AI API:** ~3-5 seconds (LLM generation)
+- **Total:** ~5-7 seconds for initial plan generation
+- **Car seat check:** ~50ms for in-repo jurisdictions; ~3-5s if AI research fallback triggers
 
 ### Bundle Size
 
 - **React:** ~45KB (gzipped with tree-shaking)
 - **Total frontend:** < 200KB (target)
-- **Lazy loading:** Split packing list view into separate chunk
 
 ---
 
@@ -505,6 +546,7 @@ interface PackingCategory {
 | Storage              | Local storage | Cloud database      |
 | Weather              | US-only       | International       |
 | Packing list         | AI-generated  | + User templates    |
+| Car seat guidance    | 5 states + AI fallback | All 50 states |
 | Shopping             | Not included  | Amazon integration  |
 | Offline              | No            | Yes (cached data)   |
 | Cross-device sync    | No            | Yes (user accounts) |
@@ -513,10 +555,10 @@ interface PackingCategory {
 ### Technical Debt Accepted for Speed
 
 1. **No user authentication:** Can't save lists across devices
-2. **No database:** Data lost if browser cleared
+2. **No database:** Data lost if browser cleared (mitigated by 7-day TTL auto-purge)
 3. **US-only:** Non-US users can't use the app
 4. **No offline mode:** Requires internet connection
-5. **Simple styling:** Focus on functionality over polish
+5. **Car seat data covers 5 states:** AI fallback handles others but with "Needs review" status
 
 **Mitigation:** All these are planned for V2 and clearly documented as future enhancements
 
@@ -526,7 +568,7 @@ interface PackingCategory {
 
 ```
 ┌─────────────────────────────────────────┐
-│          Vercel/Netlify CDN             │
+│        Cloudflare Pages (CDN)           │
 │  ┌───────────────────────────────────┐  │
 │  │     Frontend (Static Files)       │  │
 │  │     - React bundle                │  │
@@ -536,20 +578,24 @@ interface PackingCategory {
                   │ HTTPS
                   ▼
 ┌─────────────────────────────────────────┐
-│     Vercel/Railway/Render               │
+│           Railway                       │
 │  ┌───────────────────────────────────┐  │
 │  │     Backend API (Node.js)         │  │
 │  │     - Express server              │  │
 │  │     - Environment variables       │  │
+│  │     - PORT auto-assigned          │  │
 │  └───────────────────────────────────┘  │
 └─────────────────────────────────────────┘
 ```
 
-**Hosting Options:**
+**Environment variables required:**
 
-- **Frontend:** Vercel (free tier) or Netlify
-- **Backend:** Vercel serverless functions OR Railway/Render (free tier)
-- **Domain:** Custom domain (optional)
+| Variable | Where | Value |
+| -------- | ----- | ----- |
+| `ANTHROPIC_API_KEY` | Railway | Live key from console.anthropic.com |
+| `NODE_ENV` | Railway | `production` |
+| `ALLOWED_ORIGINS` | Railway | Your Cloudflare Pages URL |
+| `VITE_API_URL` | Cloudflare Pages | Your Railway backend URL |
 
 ---
 
@@ -589,10 +635,10 @@ When scaling to mobile app + full features:
 | -------- | ----------------- | ------------------------------- |
 | Frontend | React 18 + Vite   | Fast dev experience, modern     |
 | Backend  | Node.js + Express | Simple, widely understood       |
-| AI       | Claude API        | Best for structured JSON output |
+| AI       | Anthropic API     | Best for structured JSON output |
 | Weather  | Weather.gov       | Free, reliable, unlimited       |
 | Storage  | Local Storage     | Simple, no hosting needed       |
-| Hosting  | Vercel/Netlify    | Free, easy deployment           |
+| Hosting  | Railway + Cloudflare Pages | Railway for Node; Cloudflare Pages for static frontend |
 | Styling  | Tailwind CSS      | Rapid UI development            |
 
 ### External Dependencies
@@ -606,18 +652,18 @@ When scaling to mobile app + full features:
 **Backend:**
 
 - `express` - Web server
-- `@anthropic-ai/sdk` - Claude API client
-- `node-fetch` - HTTP requests
+- `@anthropic-ai/sdk` - AI API client
 - `dotenv` - Environment variables
 - `cors` - CORS handling
+- `express-rate-limit` - Request rate limiting
 
-**Total:** ~10 dependencies (keeping it minimal)
+**Total:** ~9 dependencies (keeping it minimal)
 
 ---
 
 ## References
 
 - [Weather.gov API Docs](https://www.weather.gov/documentation/services-web-api)
-- [Claude API Docs](https://docs.anthropic.com/claude/reference)
 - [React Docs](https://react.dev/)
-- [Vercel Deployment](https://vercel.com/docs)
+- [Railway Deployment](https://docs.railway.app/)
+- [Cloudflare Pages Docs](https://developers.cloudflare.com/pages/)

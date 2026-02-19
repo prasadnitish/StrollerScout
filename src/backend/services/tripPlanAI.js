@@ -1,5 +1,11 @@
-// Calls Claude to generate a structured trip itinerary in JSON.
+// AI service: generates a structured trip itinerary in JSON.
 import Anthropic from "@anthropic-ai/sdk";
+import {
+  MAX_RETRIES,
+  getTextContent,
+  requestWithRetry,
+  extractJsonCandidates,
+} from "../utils/aiHelpers.js";
 
 const MODEL_ID = "claude-haiku-4-5-20251001";
 const MAX_TOKENS = 4096;
@@ -7,25 +13,7 @@ const REPAIR_INPUT_MAX_CHARS = 28000;
 
 function parseTripPlanResponse(responseText) {
   // Attempts tolerant parsing because model output may include markdown wrappers.
-  const candidates = [];
-
-  if (typeof responseText === "string" && responseText.trim()) {
-    candidates.push(responseText.trim());
-
-    const blockMatch =
-      responseText.match(/```json\s*([\s\S]*?)\s*```/i) ||
-      responseText.match(/```\s*([\s\S]*?)\s*```/i);
-
-    if (blockMatch?.[1]) {
-      candidates.push(blockMatch[1].trim());
-    }
-
-    const jsonStart = responseText.indexOf("{");
-    const jsonEnd = responseText.lastIndexOf("}");
-    if (jsonStart !== -1 && jsonEnd !== -1 && jsonEnd > jsonStart) {
-      candidates.push(responseText.slice(jsonStart, jsonEnd + 1));
-    }
-  }
+  const candidates = extractJsonCandidates(responseText);
 
   let lastError = null;
   for (const candidate of candidates) {
@@ -48,26 +36,14 @@ function parseTripPlanResponse(responseText) {
   throw lastError || new Error("AI returned invalid format. Please try again.");
 }
 
-function getTextContent(message) {
-  // Extract plain text from Anthropic's structured content payload.
-  if (!message?.content || !Array.isArray(message.content)) {
-    return "";
-  }
-
-  return message.content
-    .filter((item) => item.type === "text")
-    .map((item) => item.text || "")
-    .join("\n")
-    .trim();
-}
-
-async function requestTripPlan(anthropic, prompt) {
-  // Shared model-call wrapper to keep retries consistent.
+async function requestTripPlan(anthropic, { system, user }) {
+  // Shared model-call wrapper; uses system parameter to isolate instructions from user data.
   const message = await anthropic.messages.create({
     model: MODEL_ID,
+    system,
     temperature: 0,
     max_tokens: MAX_TOKENS,
-    messages: [{ role: "user", content: prompt }],
+    messages: [{ role: "user", content: user }],
   });
 
   return {
@@ -79,9 +55,8 @@ async function requestTripPlan(anthropic, prompt) {
 function buildRepairPrompt(brokenText) {
   // Repair prompt constrains schema so downstream UI can trust required arrays.
   const text = (brokenText || "").slice(0, REPAIR_INPUT_MAX_CHARS);
-  return `You are a JSON repair tool.
-
-Fix the malformed JSON below and return ONLY valid JSON with this shape:
+  return {
+    system: `You are a JSON repair tool. Fix the malformed JSON and return ONLY valid JSON with this exact shape:
 {
   "overview": "string",
   "suggestedActivities": [
@@ -113,19 +88,20 @@ Rules:
 - Do not add markdown fences or commentary.
 - Ensure booleans remain booleans.
 - If a field is missing, use short sensible defaults.
-- Output valid JSON only.
-
-Malformed JSON:
-${text}`;
+- Output valid JSON only.`,
+    user: `Malformed JSON:\n${text}`,
+  };
 }
 
 async function repairTripPlanJson(anthropic, brokenText) {
   // Last-resort recovery path for malformed JSON responses.
+  const { system, user } = buildRepairPrompt(brokenText);
   const message = await anthropic.messages.create({
     model: MODEL_ID,
+    system,
     temperature: 0,
     max_tokens: MAX_TOKENS,
-    messages: [{ role: "user", content: buildRepairPrompt(brokenText) }],
+    messages: [{ role: "user", content: user }],
   });
 
   return {
@@ -153,7 +129,10 @@ export async function generateTripPlan(tripData, weatherForecast) {
       apiKey: process.env.ANTHROPIC_API_KEY,
     });
 
-    const firstAttempt = await requestTripPlan(anthropic, primaryPrompt);
+    const firstAttempt = await requestWithRetry(
+      () => requestTripPlan(anthropic, primaryPrompt),
+      MAX_RETRIES,
+    );
 
     try {
       return parseTripPlanResponse(firstAttempt.responseText);
@@ -175,7 +154,10 @@ export async function generateTripPlan(tripData, weatherForecast) {
         { compact: true },
       );
 
-      const secondAttempt = await requestTripPlan(anthropic, retryPrompt);
+      const secondAttempt = await requestWithRetry(
+        () => requestTripPlan(anthropic, retryPrompt),
+        MAX_RETRIES,
+      );
 
       try {
         return parseTripPlanResponse(secondAttempt.responseText);
@@ -193,15 +175,17 @@ export async function generateTripPlan(tripData, weatherForecast) {
         try {
           return parseTripPlanResponse(repairAttempt.responseText);
         } catch (repairParseError) {
-          console.error("Trip-plan parse failed after retry and repair:", repairParseError);
-          console.error(
-            "Stop reasons:",
-            JSON.stringify({
-              firstAttempt: firstAttempt.stopReason || "unknown",
-              secondAttempt: secondAttempt.stopReason || "unknown",
-              repairAttempt: repairAttempt.stopReason || "unknown",
-            }),
-          );
+          if (process.env.NODE_ENV !== "production") {
+            console.error("Trip-plan parse failed after retry and repair:", repairParseError);
+            console.error(
+              "Stop reasons:",
+              JSON.stringify({
+                firstAttempt: firstAttempt.stopReason || "unknown",
+                secondAttempt: secondAttempt.stopReason || "unknown",
+                repairAttempt: repairAttempt.stopReason || "unknown",
+              }),
+            );
+          }
           throw new Error(
             "AI returned invalid trip-plan JSON after retry and repair. Please try again.",
           );
@@ -209,7 +193,9 @@ export async function generateTripPlan(tripData, weatherForecast) {
       }
     }
   } catch (error) {
-    console.error("Claude API error (trip plan):", error);
+    if (process.env.NODE_ENV !== "production") {
+      console.error("AI service error (trip plan):", error);
+    }
     if (error.message.includes("invalid trip-plan JSON")) {
       throw error;
     }
@@ -226,7 +212,8 @@ function buildTripPlanPrompt(
   weatherForecast,
   options = {},
 ) {
-  // Prompt builder supports compact constraints to reduce verbose/invalid outputs.
+  // Returns { system, user } so static instructions are isolated from user-controlled data,
+  // which prevents injected content in trip fields from overriding model instructions.
   const { compact = false } = options;
 
   const childrenInfo =
@@ -235,40 +222,19 @@ function buildTripPlanPrompt(
       : "no children";
 
   const sizeGuardrail = compact
-    ? `
-**Output Size Limits (strict):**
+    ? `**Output Size Limits (strict):**
 1. Suggest exactly 6-8 activities.
 2. Keep dailyItinerary to max 5 day objects.
 3. Keep each description/reason <= 120 characters.
-4. Keep tips to max 5 items.
-`
-    : `
-**Output Size Limits:**
+4. Keep tips to max 5 items.`
+    : `**Output Size Limits:**
 1. Suggest 8-10 activities.
 2. Keep dailyItinerary to max 7 day objects.
-3. Keep all text concise.
-`;
+3. Keep all text concise.`;
 
-  return `You are a helpful travel planning assistant specializing in family trips. Generate a detailed trip itinerary.
+  const system = `You are a helpful travel planning assistant specialising in family trips. Generate trip itineraries as strict JSON only.
 
-**Trip Details:**
-- Destination: ${destination}
-- Dates: ${startDate} to ${endDate}
-- Interested Activities: ${activities.join(", ")}
-- Children: ${children.length} child(ren) - ${childrenInfo}
-
-**Weather Forecast:**
-${weatherForecast.summary}
-
-${weatherForecast.forecast
-  .slice(0, 7)
-  .map(
-    (f) =>
-      `${f.name}: ${f.high}°F, ${f.condition}, ${f.precipitation}% rain chance`,
-  )
-  .join("\n")}
-
-Generate a trip plan in JSON format with the following structure:
+Generate a trip plan with the following structure:
 
 {
   "overview": "Brief 2-3 sentence overview of the trip",
@@ -279,8 +245,8 @@ Generate a trip plan in JSON format with the following structure:
       "category": "one of: beach, hiking, city, museums, parks, dining, shopping, sports, water, wildlife, theme_park, camping",
       "description": "Brief description of the activity (1-2 sentences)",
       "duration": "Estimated duration (e.g., '2-3 hours', 'half day', 'full day')",
-      "kidFriendly": true/false,
-      "weatherDependent": true/false,
+      "kidFriendly": true,
+      "weatherDependent": false,
       "bestDays": ["Day names from forecast when this activity is recommended"],
       "reason": "Why this activity is recommended (weather, season, family-friendly, etc.)"
     }
@@ -301,10 +267,31 @@ Generate a trip plan in JSON format with the following structure:
 **Requirements:**
 1. Include a mix of indoor and outdoor activities based on weather
 2. Consider children's ages when recommending activities
-3. Prioritize activities that match their stated interests
+3. Prioritise activities that match their stated interests
 4. Include weather-appropriate suggestions (rainy day alternatives, sun protection needs)
 5. Be specific to the destination (not generic advice)
 6. Create a balanced daily itinerary that's not too packed
 ${sizeGuardrail}
 Return ONLY the JSON, no additional text.`;
+
+  const user = `Generate a detailed trip itinerary for a family trip.
+
+**Trip Details:**
+- Destination: ${destination}
+- Dates: ${startDate} to ${endDate}
+- Interested Activities: ${activities.join(", ")}
+- Children: ${children.length} child(ren) - ${childrenInfo}
+
+**Weather Forecast:**
+${weatherForecast.summary}
+
+${weatherForecast.forecast
+  .slice(0, 7)
+  .map(
+    (f) =>
+      `${f.name}: ${f.high}°F, ${f.condition}, ${f.precipitation}% rain chance`,
+  )
+  .join("\n")}`;
+
+  return { system, user };
 }

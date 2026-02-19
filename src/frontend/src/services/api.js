@@ -2,8 +2,17 @@
 // - Centralizes backend calls so UI components stay focused on state/rendering.
 // - Normalizes timeout/network errors into user-friendly messages.
 // - Keeps request/response contracts in one place.
+
 // Base URL for the backend API (local by default).
 const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
+
+// Validate API URL is available in production
+if (import.meta.env.PROD && !import.meta.env.VITE_API_URL) {
+  throw new Error(
+    "FATAL: VITE_API_URL is not configured. The app cannot connect to the backend API. " +
+    "Please ensure VITE_API_URL environment variable is set to your backend URL."
+  );
+}
 
 /**
  * Fetch helper with timeout support so the UI doesn't hang forever.
@@ -103,7 +112,7 @@ export const resolveDestination = async (query) => {
 
 // Health check for the backend.
 export const checkHealth = async () => {
-  const response = await fetch(`${API_BASE_URL}/api/health`);
+  const response = await fetchWithTimeout(`${API_BASE_URL}/api/health`, {}, 5000);
   if (!response.ok) {
     throw new Error("API is not available");
   }
