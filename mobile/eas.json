@@ -22,6 +22,12 @@
     }
   },
   "submit": {
-    "production": {}
+    "production": {
+      "ios": {
+        "appleId": "nitish.prasad@gmail.com",
+        "ascAppId": "6759532704",
+        "appleTeamId": "YNCCXQ5TUR"
+      }
+    }
   }
 }
